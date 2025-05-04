@@ -1,0 +1,56 @@
+import logging
+from itemadapter import ItemAdapter
+from twisted.internet.threads import deferToThread
+from .url_utils import get_domain_and_ips
+from .shodan_enrichment import get_shodan_data
+from .asn_lookup import get_asn_data
+
+class DomainIpPipeline:
+    def process_item(self, item, spider):
+        adapter = ItemAdapter(item)
+        url = adapter.get('checkout_page_url') or adapter.get('start_url')
+        if url:
+            domain, ips = get_domain_and_ips(url)
+            adapter['domain'] = domain
+            adapter['ip_addresses'] = ips
+        return item
+
+class ShodanEnrichmentPipeline:
+    def __init__(self, shodan_api_key):
+        self.shodan_api_key = shodan_api_key
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(shodan_api_key=crawler.settings.get('SHODAN_API_KEY'))
+
+    def process_item(self, item, spider):
+        return deferToThread(self._enrich_item, item)
+
+    def _enrich_item(self, item):
+        adapter = ItemAdapter(item)
+        ips = adapter.get('ip_addresses')
+        shodan_results = get_shodan_data(self.shodan_api_key, ips)
+        adapter['shodan_data'] = shodan_results
+        ports, orgs, vulns = set(), set(), set()
+        for host in shodan_results:
+            ports.update(host.get('ports', []))
+            if host.get('org'): orgs.add(host.get('org'))
+            vulns.update([v.rstrip('!') for v in host.get('vulns', [])])
+        adapter['shodan_ports'] = sorted(list(ports))
+        adapter['shodan_org'] = " | ".join(sorted(orgs))
+        adapter['shodan_vulns'] = sorted(vulns)
+        return item
+
+class ASNEnrichmentPipeline:
+    def process_item(self, item, spider):
+        return deferToThread(self._enrich_item, item)
+
+    def _enrich_item(self, item):
+        adapter = ItemAdapter(item)
+        ips = adapter.get('ip_addresses')
+        ip = ips[0] if ips else None
+        if ip:
+            asn_data = get_asn_data(ip)
+            if asn_data:
+                adapter.update(asn_data)
+        return item

@@ -1,0 +1,130 @@
+# twofa_crawler/spiders/checkout_spider.py
+import scrapy
+from twofa_crawler.items import CheckoutItem
+from urllib.parse import urljoin
+import logging
+import re
+from scrapy_playwright.page import PageRequest
+
+class CheckoutSpider(scrapy.Spider):
+    name = "checkout_spider"
+    start_urls = [
+        'https://demo.opencart.com/index.php?route=checkout/checkout',
+        'https://magento.softwaretestingboard.com/checkout',
+        'https://www.saucedemo.com/',
+    ]
+
+    NEGATIVE_3DS_KEYWORDS = [
+        'no vbv', 'vbv not required',
+        'no 3d secure', '3d secure not required', 'without 3d secure',
+        'no securecode', 'securecode not required',
+        'no additional security', 'no extra verification',
+        'payment bypass',
+    ]
+    CHECKOUT_LINK_KEYWORDS = ['checkout', 'payment', 'pay now', 'basket', 'cart', 'secure checkout']
+    CARDHOLDER_NAME_SELECTOR = 'input[name*="cardholder" i], input[name*="card_name" i], input[id*="cardholder" i], input[id*="card_name" i]'
+    NEGATIVE_SCRIPT_MENTIONS_RE = [
+        re.compile(r'\bno VbV\b', re.IGNORECASE),
+        re.compile(r'\bno 3D Secure\b', re.IGNORECASE),
+        re.compile(r'\bno SecureCode\b', re.IGNORECASE),
+        re.compile(r'\b3ds\s*:\s*false\b', re.IGNORECASE),
+        re.compile(r'\bthreeDS\s*:\s*false\b', re.IGNORECASE),
+    ]
+
+    def start_requests(self):
+        for url in self.start_urls:
+            if "magento" in url or "saucedemo" in url:
+                yield PageRequest(
+                    url,
+                    callback=self.parse_with_playwright,
+                    meta={
+                        "playwright": True,
+                        "playwright_include_page": True,
+                        "playwright_context": url,
+                        "errback": self.errback_playwright,
+                    }
+                )
+            else:
+                yield scrapy.Request(url, callback=self.parse_standard)
+
+    async def errback_playwright(self, failure):
+        page = failure.request.meta.get("playwright_page")
+        if page and not page.is_closed():
+            await page.close()
+        logging.error(f"Playwright request failed: {failure.value}")
+
+    def parse_standard(self, response):
+        yield from self.analyze_checkout_page(response, response.url)
+
+    async def parse_with_playwright(self, response):
+        page = response.meta["playwright_page"]
+        start_url = response.meta["playwright_context"]
+        current_url = page.url
+
+        item = CheckoutItem(
+            start_url=start_url,
+            checkout_page_url=current_url,
+            negative_3ds_indicators_found=[],
+            analysis_method=[],
+            likely_skips_3ds=None,
+            error=None,
+            interaction_log=[]
+        )
+        adapter = item
+
+        adapter["interaction_log"].append(f"Landed on: {current_url}")
+
+        try:
+            if "saucedemo.com" in current_url:
+                await page.locator('#user-name').fill('standard_user')
+                await page.locator('#password').fill('secret_sauce')
+                await page.locator('#login-button').click()
+                await page.wait_for_url("**/inventory.html", timeout=10000)
+                await page.locator('.btn_inventory').first.click()
+                await page.locator('.shopping_cart_link').click()
+                await page.wait_for_url("**/cart.html", timeout=5000)
+                await page.locator('#checkout').click()
+                await page.wait_for_url("**/checkout-step-one.html", timeout=5000)
+                await page.locator('#first-name').fill('Test')
+                await page.locator('#last-name').fill('User')
+                await page.locator('#postal-code').fill('12345')
+                await page.locator('#continue').click()
+                await page.wait_for_url("**/checkout-step-two.html", timeout=5000)
+                current_url = page.url
+                adapter["interaction_log"].append(f"At final checkout: {current_url}")
+        except Exception as e:
+            msg = f"Error during interaction: {e}"
+            logging.error(msg)
+            adapter["error"] = msg
+            adapter["interaction_log"].append(msg)
+
+        # Analyze page content
+        page_text = (await page.content()).lower()
+        scripts_content = " ".join(await page.locator('script').all_text_contents()).lower()
+        found_negative = False
+
+        for keyword in self.NEGATIVE_3DS_KEYWORDS:
+            if keyword in page_text:
+                adapter["negative_3ds_indicators_found"].append(f"Keyword: '{keyword}'")
+                adapter["analysis_method"].append("keyword_search")
+                found_negative = True
+
+        if await page.locator(self.CARDHOLDER_NAME_SELECTOR).count() == 0:
+            adapter["negative_3ds_indicators_found"].append(f"Form Field Absent: '{self.CARDHOLDER_NAME_SELECTOR}'")
+            adapter["analysis_method"].append("form_check (absence)")
+
+        for pattern in self.NEGATIVE_SCRIPT_MENTIONS_RE:
+            if pattern.search(scripts_content):
+                adapter["negative_3ds_indicators_found"].append(f"Script Mention: ~'{pattern.pattern}'")
+                adapter["analysis_method"].append("script_scan")
+                found_negative = True
+
+        adapter["likely_skips_3ds"] = True if found_negative else False
+        if not adapter["negative_3ds_indicators_found"]:
+            adapter["error"] = "No specific negative 3DS indicators found."
+        elif not found_negative:
+            adapter["error"] = "Only weak indicators found."
+
+        adapter["analysis_method"] = sorted(list(set(adapter["analysis_method"])))
+        await page.close()
+        yield item

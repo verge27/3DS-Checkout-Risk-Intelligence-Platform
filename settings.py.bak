@@ -1,0 +1,44 @@
+# settings.py
+
+FEEDS = {
+    'checkout_results.json': {
+        'format': 'json',
+        'encoding': 'utf8',
+        'store_empty': False,
+        'fields': ['start_url', 'checkout_page_url', 'likely_skips_3ds', 'negative_3ds_indicators_found', 'analysis_method', 'error'], # Control output fields/order
+        'indent': 4,
+        # 'overwrite': True
+    },
+    # Example for CSV output
+    # 'checkout_results.csv': {
+    #     'format': 'csv',
+    #     'encoding': 'utf8',
+    #     'fields': ['start_url', 'checkout_page_url', 'likely_skips_3ds', 'negative_3ds_indicators_found', 'analysis_method', 'error'],
+    #     # 'overwrite': True
+    # }
+}
+
+# Optional settings from the spider can also be placed here:
+# USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'
+# DOWNLOAD_DELAY = 2
+# CONCURRENT_REQUESTS_PER_DOMAIN = 2
+# ROBOTSTXT_OBEY = False # Use with caution!
+
+LOG_LEVEL = 'INFO'
+
+import os
+
+SHODAN_API_KEY = os.environ.get('SHODAN_API_KEY', 'YOUR_DEFAULT_KEY_IF_ANY')
+
+DOWNLOAD_HANDLERS = {
+    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+}
+TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
+PLAYWRIGHT_BROWSER_TYPE = 'chromium'
+
+ITEM_PIPELINES = {
+    'twofa_crawler.pipelines.DomainIpPipeline': 100,
+    'twofa_crawler.pipelines.ShodanEnrichmentPipeline': 200,
+    'twofa_crawler.pipelines.ASNEnrichmentPipeline': 300,
+}

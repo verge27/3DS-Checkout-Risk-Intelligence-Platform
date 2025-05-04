@@ -1,0 +1,1 @@
+# settings.py content based on integration steps provided.

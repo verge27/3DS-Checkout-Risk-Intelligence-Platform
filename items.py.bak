@@ -1,0 +1,32 @@
+# twofa_crawler/items.py
+import scrapy
+
+class CheckoutItem(scrapy.Item):
+
+    # Domain/IP Info
+    domain = scrapy.Field()
+    ip_addresses = scrapy.Field()
+
+    # Shodan Enrichment
+    shodan_data = scrapy.Field()
+    shodan_ports = scrapy.Field()
+    shodan_org = scrapy.Field()
+    shodan_vulns = scrapy.Field()
+
+    # ASN Enrichment
+    asn = scrapy.Field()
+    asn_org = scrapy.Field()
+    asn_country = scrapy.Field()
+    asn_registry = scrapy.Field()
+
+    # Playwright (optional)
+    interaction_log = scrapy.Field()
+    detected_3ds_iframe = scrapy.Field()
+    detected_3ds_redirect_url = scrapy.Field()
+
+    start_url = scrapy.Field()               # The initial URL crawled
+    checkout_page_url = scrapy.Field()       # The specific page analyzed (e.g., checkout, payment)
+    negative_3ds_indicators_found = scrapy.Field() # List of findings suggesting NO 3DS (keywords, missing fields, script mentions)
+    analysis_method = scrapy.Field()       # How the page was analyzed (e.g., 'keyword_search', 'form_check', 'script_scan')
+    likely_skips_3ds = scrapy.Field()      # Boolean: True if strong negative indicators found, otherwise False/None (Unknown)
+    error = scrapy.Field()                   # Field to store errors (e.g., checkout page not found)
